@@ -19,183 +19,247 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class EmployeeManager {
+    // Use the ReadWriteLock interface while keeping the concrete ReentrantReadWriteLock implementation.
+    // This preserves reentrancy, so a thread that already holds the write lock can safely call addEmployee()
+    // during a bulk load without deadlocking.
+    private final ReadWriteLock lock = new ReentrantReadWriteLock();
+    private final Lock readLock = lock.readLock();
+    private final Lock writeLock = lock.writeLock();
+
     private final List<Employee> employees;
     private final Map<Integer, Employee> employeeMap;
     private final Set<String> departments;
 
     public EmployeeManager() {
         employees = new ArrayList<>();
-        employeeMap = new HashMap<>();
-        departments = new HashSet<>();
+        employeeMap = new ConcurrentHashMap<>();
+        departments = ConcurrentHashMap.newKeySet();
     }
 
     public void addEmployee(Employee employee) throws DuplicateEmployeeException, InvalidEmployeeDataException {
-        ValidationUtil.validateEmployee(employee);
+        writeLock.lock();
+        try {
+            ValidationUtil.validateEmployee(employee);
 
-        if (employeeMap.containsKey(employee.getEmpId())) {
-            throw new DuplicateEmployeeException(employee.getEmpId());
+            if (employeeMap.containsKey(employee.getEmpId())) {
+                throw new DuplicateEmployeeException(employee.getEmpId());
+            }
+
+            employees.add(employee);
+            employeeMap.put(employee.getEmpId(), employee);
+            departments.add(employee.getDepartment());
+        } finally {
+            writeLock.unlock();
         }
-
-        employees.add(employee);
-        employeeMap.put(employee.getEmpId(), employee);
-        departments.add(employee.getDepartment());
     }
 
     public void removeEmployee(int empId) throws EmployeeNotFoundException {
-        Employee employee = employeeMap.get(empId);
+        writeLock.lock();
+        try {
+            Employee employee = employeeMap.get(empId);
 
-        if (employee == null) {
-            throw new EmployeeNotFoundException(empId);
+            if (employee == null) {
+                throw new EmployeeNotFoundException(empId);
+            }
+
+            employees.remove(employee);
+            employeeMap.remove(empId);
+            rebuildDepartments();
+        } finally {
+            writeLock.unlock();
         }
-
-        employees.remove(employee);
-        employeeMap.remove(empId);
-        rebuildDepartments();
     }
 
     public Employee searchEmployee(int empId) throws EmployeeNotFoundException {
-        Employee employee = employeeMap.get(empId);
+        readLock.lock();
+        try {
+            Employee employee = employeeMap.get(empId);
 
-        if (employee == null) {
-            throw new EmployeeNotFoundException(empId);
+            if (employee == null) {
+                throw new EmployeeNotFoundException(empId);
+            }
+
+            return employee;
+        } finally {
+            readLock.unlock();
         }
-
-        return employee;
     }
 
     public void displayAllEmployees() {
-        if (employees.isEmpty()) {
-            System.out.println("No employees in the system!");
-            return;
+        readLock.lock();
+        try {
+            if (employees.isEmpty()) {
+                System.out.println("No employees in the system!");
+                return;
+            }
+
+            System.out.println();
+            System.out.println("=".repeat(80));
+            System.out.println("ALL EMPLOYEES");
+            System.out.println("=".repeat(80));
+
+            for (Employee employee : employees) {
+                System.out.println(employee);
+            }
+
+            System.out.println("=".repeat(80));
+        } finally {
+            readLock.unlock();
         }
-
-        System.out.println();
-        System.out.println("=".repeat(80));
-        System.out.println("ALL EMPLOYEES");
-        System.out.println("=".repeat(80));
-
-        for (Employee employee : employees) {
-            System.out.println(employee);
-        }
-
-        System.out.println("=".repeat(80));
     }
 
     public void displayByDepartment(String department) throws DepartmentNotFoundException {
-        var departmentEmployees = new ArrayList<Employee>(); // var is clear because the ArrayList constructor shows the element type.
+        readLock.lock();
+        try {
+            var departmentEmployees = new ArrayList<Employee>(); // var is clear because the ArrayList constructor shows the element type.
 
-        for (Employee employee : employees) {
-            if (employee.getDepartment().equalsIgnoreCase(department)) {
-                departmentEmployees.add(employee);
+            for (Employee employee : employees) {
+                if (employee.getDepartment().equalsIgnoreCase(department)) {
+                    departmentEmployees.add(employee);
+                }
             }
+
+            if (departmentEmployees.isEmpty()) {
+                throw new DepartmentNotFoundException(department);
+            }
+
+            System.out.println();
+            System.out.println(FormatUtil.line(80, "="));
+            System.out.println("EMPLOYEES IN " + department.toUpperCase() + " DEPARTMENT");
+            System.out.println(FormatUtil.line(80, "="));
+
+            for (Employee employee : departmentEmployees) {
+                System.out.println(employee);
+            }
+
+            System.out.println(FormatUtil.line(80, "="));
+        } finally {
+            readLock.unlock();
         }
-
-        if (departmentEmployees.isEmpty()) {
-            throw new DepartmentNotFoundException(department);
-        }
-
-        System.out.println();
-        System.out.println(FormatUtil.line(80, "="));
-        System.out.println("EMPLOYEES IN " + department.toUpperCase() + " DEPARTMENT");
-        System.out.println(FormatUtil.line(80, "="));
-
-        for (Employee employee : departmentEmployees) {
-            System.out.println(employee);
-        }
-
-        System.out.println(FormatUtil.line(80, "="));
     }
 
     public void displayAllDepartments() {
-        if (departments.isEmpty()) {
-            System.out.println("No departments found!");
-            return;
-        }
+        readLock.lock();
+        try {
+            if (departments.isEmpty()) {
+                System.out.println("No departments found!");
+                return;
+            }
 
-        System.out.println("All Departments: " + departments);
+            System.out.println("All Departments: " + departments);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     public void calculateTotalPayroll() {
-        var totalSalary = PayrollUtil.calculateTotalSalary(employees); // var is clear because PayrollUtil returns a double total.
-        var totalBonus = PayrollUtil.calculateTotalBonus(employees); // var is clear because PayrollUtil returns a double total.
+        readLock.lock();
+        try {
+            var totalSalary = PayrollUtil.calculateTotalSalary(employees); // var is clear because PayrollUtil returns a double total.
+            var totalBonus = PayrollUtil.calculateTotalBonus(employees); // var is clear because PayrollUtil returns a double total.
 
-        System.out.println();
-        System.out.println(FormatUtil.line(50, "="));
-        System.out.println("PAYROLL SUMMARY");
-        System.out.println(FormatUtil.line(50, "="));
-        System.out.println("Total Employees: " + employees.size());
-        System.out.println("Total Salary: " + FormatUtil.currency(totalSalary));
-        System.out.println("Total Bonus: " + FormatUtil.currency(totalBonus));
-        System.out.println("Total Payroll: " + FormatUtil.currency(totalSalary + totalBonus));
-        System.out.println(FormatUtil.line(50, "="));
+            System.out.println();
+            System.out.println(FormatUtil.line(50, "="));
+            System.out.println("PAYROLL SUMMARY");
+            System.out.println(FormatUtil.line(50, "="));
+            System.out.println("Total Employees: " + employees.size());
+            System.out.println("Total Salary: " + FormatUtil.currency(totalSalary));
+            System.out.println("Total Bonus: " + FormatUtil.currency(totalBonus));
+            System.out.println("Total Payroll: " + FormatUtil.currency(totalSalary + totalBonus));
+            System.out.println(FormatUtil.line(50, "="));
+        } finally {
+            readLock.unlock();
+        }
     }
 
     public void updateSalary(int empId, double newSalary) throws EmployeeNotFoundException, InvalidEmployeeDataException {
-        if (!ValidationUtil.isPositive(newSalary)) {
-            throw new InvalidEmployeeDataException("Salary must be positive.");
+        writeLock.lock();
+        try {
+            if (!ValidationUtil.isPositive(newSalary)) {
+                throw new InvalidEmployeeDataException("Salary must be positive.");
+            }
+
+            Employee employee = employeeMap.get(empId);
+
+            if (employee == null) {
+                throw new EmployeeNotFoundException(empId);
+            }
+
+            employee.setSalary(newSalary);
+        } finally {
+            writeLock.unlock();
         }
-
-        Employee employee = employeeMap.get(empId);
-
-        if (employee == null) {
-            throw new EmployeeNotFoundException(empId);
-        }
-
-        employee.setSalary(newSalary);
     }
 
     public int getTotalEmployees() {
-        return employees.size();
+        readLock.lock();
+        try {
+            return employees.size();
+        } finally {
+            readLock.unlock();
+        }
     }
 
     public void findHighestPaidEmployee() {
-        if (employees.isEmpty()) {
-            System.out.println("No employees found!");
-            return;
-        }
-
-        Employee highestPaidEmployee = employees.get(0);
-
-        for (Employee employee : employees) {
-            if (employee.getSalary() > highestPaidEmployee.getSalary()) {
-                highestPaidEmployee = employee;
+        readLock.lock();
+        try {
+            if (employees.isEmpty()) {
+                System.out.println("No employees found!");
+                return;
             }
-        }
 
-        System.out.println("Highest Paid Employee:");
-        System.out.println(highestPaidEmployee);
+            Employee highestPaidEmployee = employees.get(0);
+
+            for (Employee employee : employees) {
+                if (employee.getSalary() > highestPaidEmployee.getSalary()) {
+                    highestPaidEmployee = employee;
+                }
+            }
+
+            System.out.println("Highest Paid Employee:");
+            System.out.println(highestPaidEmployee);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     public void displayEmployeesInSortedOrder() {
-        if (employees.isEmpty()) {
-            System.out.println("No employees in the system!");
-            return;
+        readLock.lock();
+        try {
+            if (employees.isEmpty()) {
+                System.out.println("No employees in the system!");
+                return;
+            }
+
+            Set<Employee> sortedEmployees = new TreeSet<>(
+                    Comparator.comparingInt(Employee::getEmpId)
+                            .thenComparing(Employee::getName, String.CASE_INSENSITIVE_ORDER)
+            );
+            sortedEmployees.addAll(employees);
+
+            System.out.println();
+            System.out.println(FormatUtil.line(80, "="));
+            System.out.println("EMPLOYEES IN SORTED ORDER");
+            System.out.println(FormatUtil.line(80, "="));
+
+            for (Employee employee : sortedEmployees) {
+                System.out.println(employee);
+            }
+
+            System.out.println(FormatUtil.line(80, "="));
+        } finally {
+            readLock.unlock();
         }
-
-        Set<Employee> sortedEmployees = new TreeSet<>(
-                Comparator.comparingInt(Employee::getEmpId)
-                        .thenComparing(Employee::getName, String.CASE_INSENSITIVE_ORDER)
-        );
-        sortedEmployees.addAll(employees);
-
-        System.out.println();
-        System.out.println(FormatUtil.line(80, "="));
-        System.out.println("EMPLOYEES IN SORTED ORDER");
-        System.out.println(FormatUtil.line(80, "="));
-
-        for (Employee employee : sortedEmployees) {
-            System.out.println(employee);
-        }
-
-        System.out.println(FormatUtil.line(80, "="));
     }
 
     public void saveEmployeesToFile(String fileName) throws IOException {
@@ -208,8 +272,13 @@ public class EmployeeManager {
 
         List<String> records = new ArrayList<>();
 
-        for (Employee employee : employees) {
-            records.add(toFileRecord(employee));
+        readLock.lock();
+        try {
+            for (Employee employee : employees) {
+                records.add(toFileRecord(employee));
+            }
+        } finally {
+            readLock.unlock();
         }
 
         Files.write(filePath, records, StandardCharsets.UTF_8);
@@ -222,26 +291,33 @@ public class EmployeeManager {
             return;
         }
 
-        employees.clear();
-        employeeMap.clear();
-        departments.clear();
-
         List<String> records = Files.readAllLines(filePath, StandardCharsets.UTF_8);
 
-        for (int index = 0; index < records.size(); index++) {
-            String record = records.get(index);
+        // Hold the write lock while rebuilding the entire in-memory state so readers never see a half-loaded dataset.
+        // The lock is reentrant, so reusing addEmployee() here is safe even though this method already owns the write lock.
+        writeLock.lock();
+        try {
+            employees.clear();
+            employeeMap.clear();
+            departments.clear();
 
-            if (record.trim().isEmpty()) {
-                continue;
+            for (int index = 0; index < records.size(); index++) {
+                String record = records.get(index);
+
+                if (record.trim().isEmpty()) {
+                    continue;
+                }
+
+                Employee employee = fromFileRecord(record, index + 1);
+
+                try {
+                    addEmployee(employee);
+                } catch (DuplicateEmployeeException | InvalidEmployeeDataException exception) {
+                    throw new IOException("Invalid employee data at line " + (index + 1) + ": " + exception.getMessage(), exception);
+                }
             }
-
-            Employee employee = fromFileRecord(record, index + 1);
-
-            try {
-                addEmployee(employee);
-            } catch (DuplicateEmployeeException | InvalidEmployeeDataException exception) {
-                throw new IOException("Invalid employee data at line " + (index + 1) + ": " + exception.getMessage(), exception);
-            }
+        } finally {
+            writeLock.unlock();
         }
     }
 

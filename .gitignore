@@ -28,3 +28,14 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+.idea/
+out/
+*.class
+jdk17.tar.gz
+
+.idea/
+out/
+*.class
+jdk17.tar.gz
+data/employees.txt
