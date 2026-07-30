@@ -47,7 +47,7 @@ public class EmployeeServer {
             while (!serverSocket.isClosed()) {
                 try {
                     Socket clientSocket = serverSocket.accept();
-                    clientSocket.setSoTimeout(30000);
+                    clientSocket.setSoTimeout(60000);
                     //System.out.println("Socket timeout = " + clientSocket.getSoTimeout());
                     threadPool.execute(new ClientHandler(clientSocket, authenticationService));
                 } catch (java.net.SocketException e) {

@@ -45,7 +45,7 @@ public class ClientHandler implements Runnable {
             }
 
         }catch (SocketTimeoutException e) {
-            System.out.println("Client inactive for 30 seconds. Closing connection.");
+            System.out.println("Client inactive for 60 seconds. Closing connection.");
         }
         catch (IOException e) {
             System.out.println("Client disconnected.");
