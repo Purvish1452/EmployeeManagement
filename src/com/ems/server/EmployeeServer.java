@@ -10,9 +10,10 @@ public class EmployeeServer {
     private static final int PORT = 5000;
     private static final int THREAD_POOL_SIZE = 5;
 
+    @SuppressWarnings("try")
     public static void main(String[] args) {
         ExecutorService threadPool = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
-        com.ems.service.EmployeeManager employeeManager = new com.ems.service.EmployeeManager();
+        com.ems.service.UserAuthenticationService authenticationService = new com.ems.service.UserAuthenticationService();
         
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
             System.out.println("Server Started on port " + PORT + "...");
@@ -41,7 +42,7 @@ public class EmployeeServer {
             while (!serverSocket.isClosed()) {
                 try {
                     Socket clientSocket = serverSocket.accept();
-                    threadPool.execute(new ClientHandler(clientSocket, employeeManager));
+                    threadPool.execute(new ClientHandler(clientSocket, authenticationService));
                 } catch (java.net.SocketException e) {
                     // This exception is expected when serverSocket is closed via shutdown hook
                     if (serverSocket.isClosed()) {
