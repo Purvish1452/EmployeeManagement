@@ -7,6 +7,7 @@ import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.Scanner;
 
+/** Console client for the authenticated employee server protocol. */
 public class EmployeeClient {
     private static final String SERVER_ADDRESS = "localhost";
     private static final int SERVER_PORT = 5000;
@@ -16,77 +17,49 @@ public class EmployeeClient {
              BufferedReader serverIn = new BufferedReader(new InputStreamReader(socket.getInputStream()));
              PrintWriter serverOut = new PrintWriter(socket.getOutputStream(), true);
              Scanner scanner = new Scanner(System.in)) {
-
-            System.out.println("Connected to Employee Server at " + SERVER_ADDRESS + ":" + SERVER_PORT);
-
+            System.out.println(serverIn.readLine());
+            if (!authenticate(scanner, serverIn, serverOut)) return;
             while (true) {
                 printMenu();
-                System.out.print("Enter choice: ");
-                String choice = scanner.nextLine().trim();
-
-                String command = buildCommand(choice, scanner);
-                if (command == null) {
-                    System.out.println("Invalid choice. Please try again.");
-                    continue;
-                }
-
-                // Send String command
+                String command = buildCommand(scanner);
+                if (command == null) continue;
                 serverOut.println(command);
-
-                if ("EXIT".equalsIgnoreCase(command)) {
-                    System.out.println("Disconnecting from server...");
-                    break;
-                }
-
-                // Receive String response
                 String response = serverIn.readLine();
-                
-                // Display response
-                if (response != null) {
-                    System.out.println("Server Response:\n" + response.replace("[NEWLINE]", "\n"));
-                } else {
-                    System.out.println("Server connection closed.");
-                    break;
-                }
+                if (response == null) break;
+                System.out.println(response.replace("[NEWLINE]", System.lineSeparator()));
+                if ("EXIT".equalsIgnoreCase(command)) return;
             }
-        } catch (IOException e) {
-            System.err.println("Client Error: " + e.getMessage());
+        } catch (IOException exception) {
+            System.err.println("Client error: " + exception.getMessage());
         }
     }
 
-    private static void printMenu() {
-        System.out.println("\n--- Employee Management Client Menu ---");
-        System.out.println("1 Add");
-        System.out.println("2 Search");
-        System.out.println("3 Update");
-        System.out.println("4 Delete");
-        System.out.println("5 View");
-        System.out.println("6 Payroll");
-        System.out.println("7 Exit");
+    private static boolean authenticate(Scanner scanner, BufferedReader serverIn, PrintWriter serverOut) throws IOException {
+        System.out.print("Log in (L) or register (R): ");
+        String action = scanner.nextLine().trim().equalsIgnoreCase("R") ? "REGISTER" : "LOGIN";
+        System.out.print("Username: "); String username = scanner.nextLine().trim();
+        System.out.print("Password: "); String password = scanner.nextLine();
+        serverOut.println(action + "|" + username + "|" + password);
+        String response = serverIn.readLine();
+        System.out.println(response);
+        return response != null && response.startsWith("Authenticated as ");
     }
 
-    private static String buildCommand(String choice, Scanner scanner) {
-        switch (choice) {
-            case "1":
-                System.out.print("Enter command (e.g., ADD|John|IT|50000): ");
-                return scanner.nextLine().trim();
-            case "2":
-                System.out.print("Enter command (e.g., SEARCH|101): ");
-                return scanner.nextLine().trim();
-            case "3":
-                System.out.print("Enter command (e.g., UPDATE|101|65000): ");
-                return scanner.nextLine().trim();
-            case "4":
-                System.out.print("Enter command (e.g., DELETE|101): ");
-                return scanner.nextLine().trim();
-            case "5":
-                return "VIEW";
-            case "6":
-                return "PAYROLL";
-            case "7":
-                return "EXIT";
-            default:
-                return null;
+    private static void printMenu() {
+        System.out.println("\n1 Add  2 Search  3 Update  4 Delete  5 View  6 Payroll  7 Exit");
+    }
+
+    private static String buildCommand(Scanner scanner) {
+        System.out.print("Enter choice: ");
+        switch (scanner.nextLine().trim()) {
+            case "1": System.out.print("Name: "); String name = scanner.nextLine().trim(); System.out.print("Department: "); String department = scanner.nextLine().trim(); System.out.print("Salary: "); return "ADD|" + name + "|" + department + "|" + scanner.nextLine().trim();
+            case "2": System.out.print("Employee ID: "); return "SEARCH|" + scanner.nextLine().trim();
+            case "3": System.out.print("Employee ID: "); String id = scanner.nextLine().trim(); System.out.print("New salary: "); return "UPDATE|" + id + "|" + scanner.nextLine().trim();
+            case "4": System.out.print("Employee ID: "); return "DELETE|" + scanner.nextLine().trim();
+            case "5": return "VIEW";
+            case "6": return "PAYROLL";
+            case "7": return "EXIT";
+            default: System.out.println("Invalid choice."); return null;
         }
     }
 }
