@@ -3,108 +3,188 @@ package com.ems.server;
 import com.ems.service.EmployeeManager;
 import com.ems.service.UserAuthenticationService;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
+import java.io.*;
 import java.net.Socket;
+import java.util.Arrays;
 import java.util.Locale;
 
-/** Processes one socket connection. Commands are rejected until LOGIN or REGISTER succeeds. */
 public class ClientHandler implements Runnable {
+
     private final Socket clientSocket;
     private final UserAuthenticationService authenticationService;
     private UserAuthenticationService.UserSession session;
 
-    public ClientHandler(Socket clientSocket, UserAuthenticationService authenticationService) {
+    public ClientHandler(Socket clientSocket,
+                         UserAuthenticationService authenticationService) {
         this.clientSocket = clientSocket;
         this.authenticationService = authenticationService;
     }
 
     @Override
     public void run() {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-             PrintWriter writer = new PrintWriter(clientSocket.getOutputStream(), true)) {
-            writer.println("Welcome. Authenticate with LOGIN|username|password or REGISTER|username|password.");
+
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(clientSocket.getInputStream()));
+
+             PrintWriter writer = new PrintWriter(
+                     clientSocket.getOutputStream(), true)) {
+
+            writer.println("Welcome. LOGIN|username|password or REGISTER|username|password");
+
             String command;
+
             while ((command = reader.readLine()) != null) {
+
                 if ("EXIT".equalsIgnoreCase(command.trim())) {
                     writer.println("Goodbye!");
-                    return;
+                    break;
                 }
+
                 writer.println(processCommand(command));
             }
-        } catch (IOException exception) {
-            System.err.println("Client connection error: " + exception.getMessage());
+
+        } catch (IOException e) {
+            System.out.println("Client disconnected.");
         } finally {
-            try { clientSocket.close(); } catch (IOException ignored) { }
+            try {
+                clientSocket.close();
+            } catch (IOException ignored) {
+            }
         }
     }
 
     private String processCommand(String command) {
-        String[] parts = command.split("\\|", -1);
-        String action = parts.length == 0 ? "" : parts[0].trim().toUpperCase(Locale.ROOT);
+
         try {
-            if ("LOGIN".equals(action) || "REGISTER".equals(action)) {
-                return authenticate(action, parts);
+
+            String[] parts = command.split("\\|");
+            String action = parts[0].toUpperCase(Locale.ROOT);
+
+            switch (action) {
+
+                case "LOGIN":
+                case "REGISTER":
+                    return authenticate(action, parts);
+
+                case "ADD":
+                case "SEARCH":
+                case "UPDATE":
+                case "DELETE":
+                case "VIEW":
+                case "PAYROLL":
+
+                    if (session == null) {
+                        throw new IllegalStateException("Please login first.");
+                    }
+
+                    return employeeCommand(action, parts);
+
+                default:
+                    return "Unknown command.";
             }
-            if (session == null) {
-                throw new IllegalStateException("Please log in before using employee commands.");
-            }
-            return processEmployeeCommand(action, parts, session.getEmployeeManager());
-        } catch (IllegalArgumentException | IllegalStateException | java.util.NoSuchElementException exception) {
-            return "Error: " + exception.getMessage();
-        } catch (IOException exception) {
-            return "Error: Could not save or load your employee data: " + exception.getMessage();
+
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
         }
     }
 
     private String authenticate(String action, String[] parts) throws IOException {
+
         if (parts.length != 3) {
-            throw new IllegalArgumentException(action + " requires " + action + "|username|password.");
+            throw new IllegalArgumentException("Invalid command.");
         }
+
         char[] password = parts[2].toCharArray();
+
         try {
-            session = "LOGIN".equals(action) ? authenticationService.login(parts[1], password) : authenticationService.register(parts[1], password);
-            return "Authenticated as " + session.getUsername() + ".";
+
+            if ("LOGIN".equals(action)) {
+                session = authenticationService.login(parts[1], password);
+            } else {
+                session = authenticationService.register(parts[1], password);
+            }
+
+            return "Authenticated as " + session.getUsername();
+
         } finally {
-            java.util.Arrays.fill(password, '\0');
+            Arrays.fill(password, '\0');
         }
     }
 
-    private String processEmployeeCommand(String action, String[] parts, EmployeeManager manager) throws IOException {
-        if ("ADD".equals(action)) {
-            requireLength(parts, 4, "ADD|Name|Department|Salary");
-            int id = manager.addPermanentEmployeeWithNextId(parts[1], parts[2], Double.parseDouble(parts[3]));
-            session.saveEmployees();
-            return "Employee added successfully (ID: " + id + ").";
+    private String employeeCommand(String action, String[] parts)
+            throws IOException {
+
+        EmployeeManager manager = session.getEmployeeManager();
+
+        switch (action) {
+
+            case "ADD":
+
+                requireLength(parts, 4);
+
+                int id = manager.addPermanentEmployeeWithNextId(
+                        parts[1],
+                        parts[2],
+                        Double.parseDouble(parts[3]));
+
+                session.saveEmployees();
+
+                return "Employee added. ID = " + id;
+
+            case "SEARCH":
+
+                requireLength(parts, 2);
+                return manager.searchEmployee(
+                        Integer.parseInt(parts[1])).toString();
+
+            case "UPDATE":
+
+                requireLength(parts, 3);
+
+                manager.updateSalary(
+                        Integer.parseInt(parts[1]),
+                        Double.parseDouble(parts[2]));
+
+                session.saveEmployees();
+
+                return "Employee updated.";
+
+            case "DELETE":
+
+                requireLength(parts, 2);
+
+                manager.removeEmployee(
+                        Integer.parseInt(parts[1]));
+
+                session.saveEmployees();
+
+                return "Employee deleted.";
+
+            case "VIEW":
+
+                return manager.formatEmployees(
+                        manager.getEmployees(),
+                        "ALL EMPLOYEES");
+
+            case "PAYROLL":
+
+                EmployeeManager.PayrollSummary payroll =
+                        manager.getPayrollSummary();
+
+                return "Employees : " + payroll.getEmployeeCount()
+                        + "\nSalary : " + payroll.getTotalSalary()
+                        + "\nBonus : " + payroll.getTotalBonus()
+                        + "\nPayroll : " + payroll.getTotalPayroll();
+
+            default:
+                return "Unknown command.";
         }
-        if ("SEARCH".equals(action)) {
-            requireLength(parts, 2, "SEARCH|ID");
-            return manager.searchEmployee(Integer.parseInt(parts[1])).toString();
-        }
-        if ("UPDATE".equals(action)) {
-            requireLength(parts, 3, "UPDATE|ID|Salary");
-            manager.updateSalary(Integer.parseInt(parts[1]), Double.parseDouble(parts[2]));
-            session.saveEmployees();
-            return "Salary updated successfully.";
-        }
-        if ("DELETE".equals(action)) {
-            requireLength(parts, 2, "DELETE|ID");
-            manager.removeEmployee(Integer.parseInt(parts[1]));
-            session.saveEmployees();
-            return "Employee deleted successfully.";
-        }
-        if ("VIEW".equals(action)) return manager.formatEmployees(manager.getEmployees(), "ALL EMPLOYEES").replace(System.lineSeparator(), "[NEWLINE]");
-        if ("PAYROLL".equals(action)) {
-            EmployeeManager.PayrollSummary payroll = manager.getPayrollSummary();
-            return "Total Employees: " + payroll.getEmployeeCount() + "[NEWLINE]Total Salary: " + payroll.getTotalSalary()
-                    + "[NEWLINE]Total Bonus: " + payroll.getTotalBonus() + "[NEWLINE]Total Payroll: " + payroll.getTotalPayroll();
-        }
-        throw new IllegalArgumentException("Command not recognized.");
     }
 
-    private void requireLength(String[] parts, int expected, String format) {
-        if (parts.length != expected) throw new IllegalArgumentException("Invalid format. Expected " + format + ".");
+    private void requireLength(String[] parts, int expected) {
+
+        if (parts.length != expected) {
+            throw new IllegalArgumentException("Invalid command format.");
+        }
     }
 }
