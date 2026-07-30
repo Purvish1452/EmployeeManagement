@@ -14,13 +14,16 @@ public class EmployeeServer {
 
     @SuppressWarnings("try")
     public static void main(String[] args) {
+        System.out.println("SERVER BUILD: " + EmployeeServer.class.getProtectionDomain()
+                .getCodeSource().getLocation());
         ExecutorService threadPool = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
         UserAuthenticationService authenticationService = new UserAuthenticationService();
 
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
             System.out.println("Server Started on port " + PORT + "...");
 
-            // If you do ctrl+c on Running program then jvm close resources then it otherwise jvm direct exit and resource inconsistent  // Add Shutdown Hook for Graceful Shutdown
+            // If you do ctrl+c on Running program then jvm close resources then it otherwise jvm direct exit and resource inconsistent
+            // Add Shutdown Hook for Graceful Shutdown
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 System.out.println("\nInitiating graceful shutdown...");
                 try {
@@ -44,7 +47,8 @@ public class EmployeeServer {
             while (!serverSocket.isClosed()) {
                 try {
                     Socket clientSocket = serverSocket.accept();
-                    clientSocket.setSoTimeout(60000);
+                    clientSocket.setSoTimeout(30000);
+                    //System.out.println("Socket timeout = " + clientSocket.getSoTimeout());
                     threadPool.execute(new ClientHandler(clientSocket, authenticationService));
                 } catch (java.net.SocketException e) {
                     // This exception is expected when serverSocket is closed via shutdown hook
