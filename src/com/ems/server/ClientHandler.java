@@ -5,6 +5,7 @@ import com.ems.service.UserAuthenticationService;
 
 import java.io.*;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.Arrays;
 import java.util.Locale;
 
@@ -43,7 +44,10 @@ public class ClientHandler implements Runnable {
                 writer.println(processCommand(command));
             }
 
-        } catch (IOException e) {
+        }catch (SocketTimeoutException e) {
+            System.out.println("Client inactive for 30 seconds. Closing connection.");
+        }
+        catch (IOException e) {
             System.out.println("Client disconnected.");
         } finally {
             try {
