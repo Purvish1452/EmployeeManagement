@@ -1,7 +1,7 @@
 package com.ems.model;
 
 public class ContractEmployee extends Employee {
-    private int contractMonths;
+    private final int contractMonths;
 
     public ContractEmployee(int empId, String name, String department, double salary, int contractMonths) {
         super(empId, name, department, salary);
@@ -10,14 +10,16 @@ public class ContractEmployee extends Employee {
 
     @Override
     public double calculateBonus() {
-        return salary * 0.05;
+        return getSalary() * 0.05;
+    }
+
+    @Override
+    public ContractEmployee withSalary(double salary) {
+        return new ContractEmployee(getEmpId(), getName(), getDepartment(), salary, contractMonths);
     }
 
     public int getContractMonths() {
         return contractMonths;
     }
 
-    public void setContractMonths(int contractMonths) {
-        this.contractMonths = contractMonths;
-    }
 }

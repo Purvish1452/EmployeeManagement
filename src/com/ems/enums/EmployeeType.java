@@ -1,7 +1,5 @@
 package com.ems.enums;
 
-import com.ems.exception.InvalidEmployeeTypeException;
-
 public enum EmployeeType {
     PERMANENT(1, "Permanent Employee"),
     CONTRACT(2, "Contract Employee"),
@@ -23,13 +21,13 @@ public enum EmployeeType {
         return displayName;
     }
 
-    public static EmployeeType fromMenuChoice(int menuChoice) throws InvalidEmployeeTypeException {
+    public static EmployeeType fromMenuChoice(int menuChoice) {
         for (EmployeeType employeeType : values()) {
             if (employeeType.menuChoice == menuChoice) {
                 return employeeType;
             }
         }
 
-        throw new InvalidEmployeeTypeException(menuChoice);
+        throw new IllegalArgumentException("Invalid employee type selected: " + menuChoice);
     }
 }

@@ -3,10 +3,10 @@ package com.ems.model;
 import com.ems.util.FormatUtil;
 
 public abstract class Employee {
-    protected int empId;
-    protected String name;
-    protected String department;
-    protected double salary;
+    private final int empId;
+    private final String name;
+    private final String department;
+    private final double salary;
 
     public Employee(int empId, String name, String department, double salary) {
         this.empId = empId;
@@ -16,6 +16,9 @@ public abstract class Employee {
     }
 
     public abstract double calculateBonus();
+
+    /** Returns an immutable copy of this employee with the supplied salary. */
+    public abstract Employee withSalary(double salary);
 
     public int getEmpId() {
         return empId;
@@ -33,16 +36,12 @@ public abstract class Employee {
         return salary;
     }
 
-    public void setSalary(double salary) {
-        this.salary = salary;
-    }
-
     @Override
     public String toString() {
         return "ID: " + empId
                 + " | Name: " + name
                 + " | Department: " + department
-                + " | Salary: " + FormatUtil.currency(salary)
+                + " | Salary: " + FormatUtil.currency(getSalary())
                 + " | Bonus: " + FormatUtil.currency(calculateBonus());
     }
 }
