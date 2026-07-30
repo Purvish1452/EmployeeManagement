@@ -1,9 +1,5 @@
 package com.ems.service;
 
-import com.ems.exception.DepartmentNotFoundException;
-import com.ems.exception.DuplicateEmployeeException;
-import com.ems.exception.EmployeeNotFoundException;
-import com.ems.exception.InvalidEmployeeDataException;
 import com.ems.model.ContractEmployee;
 import com.ems.model.Employee;
 import com.ems.model.Intern;
@@ -18,385 +14,304 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+/**
+ * Thread-safe in-memory employee store for one authenticated user.
+ * A single lock protects all related indexes, so standard collections are faster and sufficient.
+ */
 public class EmployeeManager {
-    // Use the ReadWriteLock interface while keeping the concrete ReentrantReadWriteLock implementation.
-    // This preserves reentrancy, so a thread that already holds the write lock can safely call addEmployee()
-    // during a bulk load without deadlocking.
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
-    private final Lock readLock = lock.readLock();
-    private final Lock writeLock = lock.writeLock();
+    private final Map<Integer, Employee> employeesById = new LinkedHashMap<>();
+    private final Set<String> departments = new HashSet<>();
+    private int nextEmployeeId = 101;
 
-    private final List<Employee> employees;
-    private final Map<Integer, Employee> employeeMap;
-    private final Set<String> departments;
-
-    public EmployeeManager() {
-        employees = new ArrayList<>();
-        employeeMap = new ConcurrentHashMap<>();
-        departments = ConcurrentHashMap.newKeySet();
-    }
-
-    public void addEmployee(Employee employee) throws DuplicateEmployeeException, InvalidEmployeeDataException {
-        writeLock.lock();
+    public void addEmployee(Employee employee) {
+        ValidationUtil.validateEmployee(employee);
+        lock.writeLock().lock();
         try {
-            ValidationUtil.validateEmployee(employee);
-
-            if (employeeMap.containsKey(employee.getEmpId())) {
-                throw new DuplicateEmployeeException(employee.getEmpId());
-            }
-
-            employees.add(employee);
-            employeeMap.put(employee.getEmpId(), employee);
-            departments.add(employee.getDepartment());
+            addEmployeeLocked(employee);
         } finally {
-            writeLock.unlock();
+            lock.writeLock().unlock();
         }
     }
 
-    public void removeEmployee(int empId) throws EmployeeNotFoundException {
-        writeLock.lock();
+    public void removeEmployee(int empId) {
+        lock.writeLock().lock();
         try {
-            Employee employee = employeeMap.get(empId);
-
-            if (employee == null) {
-                throw new EmployeeNotFoundException(empId);
+            if (employeesById.remove(empId) == null) {
+                throw employeeNotFound(empId);
             }
-
-            employees.remove(employee);
-            employeeMap.remove(empId);
-            rebuildDepartments();
+            rebuildDepartmentsLocked();
         } finally {
-            writeLock.unlock();
+            lock.writeLock().unlock();
         }
     }
 
-    public Employee searchEmployee(int empId) throws EmployeeNotFoundException {
-        readLock.lock();
+    public Employee searchEmployee(int empId) {
+        lock.readLock().lock();
         try {
-            Employee employee = employeeMap.get(empId);
-
+            Employee employee = employeesById.get(empId);
             if (employee == null) {
-                throw new EmployeeNotFoundException(empId);
+                throw employeeNotFound(empId);
             }
-
             return employee;
         } finally {
-            readLock.unlock();
+            lock.readLock().unlock();
         }
     }
 
-    public void displayAllEmployees() {
-        readLock.lock();
+    public List<Employee> getEmployees() {
+        lock.readLock().lock();
         try {
-            if (employees.isEmpty()) {
-                System.out.println("No employees in the system!");
-                return;
-            }
-
-            System.out.println();
-            System.out.println("=".repeat(80));
-            System.out.println("ALL EMPLOYEES");
-            System.out.println("=".repeat(80));
-
-            for (Employee employee : employees) {
-                System.out.println(employee);
-            }
-
-            System.out.println("=".repeat(80));
+            return Collections.unmodifiableList(new ArrayList<>(employeesById.values()));
         } finally {
-            readLock.unlock();
+            lock.readLock().unlock();
         }
     }
 
-    public void displayByDepartment(String department) throws DepartmentNotFoundException {
-        readLock.lock();
+    public List<Employee> getEmployeesByDepartment(String department) {
+        if (!ValidationUtil.isNonBlank(department)) {
+            throw new IllegalArgumentException("Department cannot be empty.");
+        }
+        lock.readLock().lock();
         try {
-            var departmentEmployees = new ArrayList<Employee>(); // var is clear because the ArrayList constructor shows the element type.
-
-            for (Employee employee : employees) {
+            List<Employee> matches = new ArrayList<>();
+            for (Employee employee : employeesById.values()) {
                 if (employee.getDepartment().equalsIgnoreCase(department)) {
-                    departmentEmployees.add(employee);
+                    matches.add(employee);
                 }
             }
-
-            if (departmentEmployees.isEmpty()) {
-                throw new DepartmentNotFoundException(department);
+            if (matches.isEmpty()) {
+                throw new NoSuchElementException("No employees found in " + department + " department.");
             }
-
-            System.out.println();
-            System.out.println(FormatUtil.line(80, "="));
-            System.out.println("EMPLOYEES IN " + department.toUpperCase() + " DEPARTMENT");
-            System.out.println(FormatUtil.line(80, "="));
-
-            for (Employee employee : departmentEmployees) {
-                System.out.println(employee);
-            }
-
-            System.out.println(FormatUtil.line(80, "="));
+            return Collections.unmodifiableList(matches);
         } finally {
-            readLock.unlock();
+            lock.readLock().unlock();
         }
     }
 
-    public void displayAllDepartments() {
-        readLock.lock();
+    public Set<String> getDepartments() {
+        lock.readLock().lock();
         try {
-            if (departments.isEmpty()) {
-                System.out.println("No departments found!");
-                return;
-            }
-
-            System.out.println("All Departments: " + departments);
+            Set<String> result = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+            result.addAll(departments);
+            return Collections.unmodifiableSet(result);
         } finally {
-            readLock.unlock();
+            lock.readLock().unlock();
         }
     }
 
-    public void calculateTotalPayroll() {
-        readLock.lock();
-        try {
-            var totalSalary = PayrollUtil.calculateTotalSalary(employees); // var is clear because PayrollUtil returns a double total.
-            var totalBonus = PayrollUtil.calculateTotalBonus(employees); // var is clear because PayrollUtil returns a double total.
-
-            System.out.println();
-            System.out.println(FormatUtil.line(50, "="));
-            System.out.println("PAYROLL SUMMARY");
-            System.out.println(FormatUtil.line(50, "="));
-            System.out.println("Total Employees: " + employees.size());
-            System.out.println("Total Salary: " + FormatUtil.currency(totalSalary));
-            System.out.println("Total Bonus: " + FormatUtil.currency(totalBonus));
-            System.out.println("Total Payroll: " + FormatUtil.currency(totalSalary + totalBonus));
-            System.out.println(FormatUtil.line(50, "="));
-        } finally {
-            readLock.unlock();
+    public void updateSalary(int empId, double newSalary) {
+        if (!ValidationUtil.isPositive(newSalary)) {
+            throw new IllegalArgumentException("Salary must be positive.");
         }
-    }
-
-    public void updateSalary(int empId, double newSalary) throws EmployeeNotFoundException, InvalidEmployeeDataException {
-        writeLock.lock();
+        lock.writeLock().lock();
         try {
-            if (!ValidationUtil.isPositive(newSalary)) {
-                throw new InvalidEmployeeDataException("Salary must be positive.");
-            }
-
-            Employee employee = employeeMap.get(empId);
-
+            Employee employee = employeesById.get(empId);
             if (employee == null) {
-                throw new EmployeeNotFoundException(empId);
+                throw employeeNotFound(empId);
             }
-
-            employee.setSalary(newSalary);
+            employeesById.put(empId, employee.withSalary(newSalary));
         } finally {
-            writeLock.unlock();
+            lock.writeLock().unlock();
         }
     }
 
     public int getTotalEmployees() {
-        readLock.lock();
+        lock.readLock().lock();
         try {
-            return employees.size();
+            return employeesById.size();
         } finally {
-            readLock.unlock();
+            lock.readLock().unlock();
         }
     }
 
-    public void findHighestPaidEmployee() {
-        readLock.lock();
+    public int addPermanentEmployeeWithNextId(String name, String department, double salary) {
+        lock.writeLock().lock();
         try {
-            if (employees.isEmpty()) {
-                System.out.println("No employees found!");
-                return;
-            }
+            int employeeId = nextEmployeeId;
+            addEmployeeLocked(new PermanentEmployee(employeeId, name, department, salary, 1));
+            return employeeId;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
 
-            Employee highestPaidEmployee = employees.get(0);
+    public Employee getHighestPaidEmployee() {
+        lock.readLock().lock();
+        try {
+            Employee highestPaidEmployee = null;
 
-            for (Employee employee : employees) {
-                if (employee.getSalary() > highestPaidEmployee.getSalary()) {
+            for (Employee employee : employeesById.values()) {
+                if (highestPaidEmployee == null
+                        || employee.getSalary() > highestPaidEmployee.getSalary()) {
                     highestPaidEmployee = employee;
                 }
             }
 
-            System.out.println("Highest Paid Employee:");
-            System.out.println(highestPaidEmployee);
+            if (highestPaidEmployee == null) {
+                throw new NoSuchElementException("No employees found.");
+            }
+
+            return highestPaidEmployee;
         } finally {
-            readLock.unlock();
+            lock.readLock().unlock();
         }
     }
 
-    public void displayEmployeesInSortedOrder() {
-        readLock.lock();
-        try {
-            if (employees.isEmpty()) {
-                System.out.println("No employees in the system!");
-                return;
+    public List<Employee> getEmployeesSortedById() {
+        List<Employee> result = new ArrayList<>(getEmployees());
+        Collections.sort(result, new Comparator<Employee>() {
+            @Override
+            public int compare(Employee firstEmployee, Employee secondEmployee) {
+                int idComparison = Integer.compare(firstEmployee.getEmpId(), secondEmployee.getEmpId());
+
+                if (idComparison != 0) {
+                    return idComparison;
+                }
+
+                return String.CASE_INSENSITIVE_ORDER.compare(
+                        firstEmployee.getName(), secondEmployee.getName());
             }
-
-            Set<Employee> sortedEmployees = new TreeSet<>(
-                    Comparator.comparingInt(Employee::getEmpId)
-                            .thenComparing(Employee::getName, String.CASE_INSENSITIVE_ORDER)
-            );
-            sortedEmployees.addAll(employees);
-
-            System.out.println();
-            System.out.println(FormatUtil.line(80, "="));
-            System.out.println("EMPLOYEES IN SORTED ORDER");
-            System.out.println(FormatUtil.line(80, "="));
-
-            for (Employee employee : sortedEmployees) {
-                System.out.println(employee);
-            }
-
-            System.out.println(FormatUtil.line(80, "="));
-        } finally {
-            readLock.unlock();
-        }
+        });
+        return Collections.unmodifiableList(result);
     }
 
-    public void saveEmployeesToFile(String fileName) throws IOException {
-        Path filePath = Path.of(fileName);
-        Path parentPath = filePath.getParent();
+    public PayrollSummary getPayrollSummary() {
+        List<Employee> snapshot = getEmployees();
+        double salary = PayrollUtil.calculateTotalSalary(snapshot);
+        double bonus = PayrollUtil.calculateTotalBonus(snapshot);
+        return new PayrollSummary(snapshot.size(), salary, bonus);
+    }
 
-        if (parentPath != null) {
-            Files.createDirectories(parentPath);
+    public void saveEmployeesToFile(Path filePath) throws IOException {
+        Path parent = filePath.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
         }
-
         List<String> records = new ArrayList<>();
-
-        readLock.lock();
-        try {
-            for (Employee employee : employees) {
-                records.add(toFileRecord(employee));
-            }
-        } finally {
-            readLock.unlock();
+        for (Employee employee : getEmployees()) {
+            records.add(toFileRecord(employee));
         }
-
         Files.write(filePath, records, StandardCharsets.UTF_8);
     }
 
-    public void loadEmployeesFromFile(String fileName) throws IOException {
-        Path filePath = Path.of(fileName);
-
+    public void loadEmployeesFromFile(Path filePath) throws IOException {
         if (!Files.exists(filePath)) {
             return;
         }
-
         List<String> records = Files.readAllLines(filePath, StandardCharsets.UTF_8);
-
-        // Hold the write lock while rebuilding the entire in-memory state so readers never see a half-loaded dataset.
-        // The lock is reentrant, so reusing addEmployee() here is safe even though this method already owns the write lock.
-        writeLock.lock();
+        List<Employee> loadedEmployees = new ArrayList<>();
+        for (int index = 0; index < records.size(); index++) {
+            String record = records.get(index).trim();
+            if (!record.isEmpty()) {
+                loadedEmployees.add(fromFileRecord(record, index + 1));
+            }
+        }
+        lock.writeLock().lock();
         try {
-            employees.clear();
-            employeeMap.clear();
+            employeesById.clear();
             departments.clear();
-
-            for (int index = 0; index < records.size(); index++) {
-                String record = records.get(index);
-
-                if (record.trim().isEmpty()) {
-                    continue;
-                }
-
-                Employee employee = fromFileRecord(record, index + 1);
-
-                try {
-                    addEmployee(employee);
-                } catch (DuplicateEmployeeException | InvalidEmployeeDataException exception) {
-                    throw new IOException("Invalid employee data at line " + (index + 1) + ": " + exception.getMessage(), exception);
-                }
+            nextEmployeeId = 101;
+            for (Employee employee : loadedEmployees) {
+                addEmployeeLocked(employee);
             }
         } finally {
-            writeLock.unlock();
+            lock.writeLock().unlock();
         }
     }
 
-    private void rebuildDepartments() {
-        departments.clear();
+    public String formatEmployees(List<Employee> employeeList, String title) {
+        if (employeeList.isEmpty()) {
+            return "No employees in the system.";
+        }
+        StringBuilder output = new StringBuilder().append(FormatUtil.line(80, "=")).append(System.lineSeparator())
+                .append(title).append(System.lineSeparator()).append(FormatUtil.line(80, "=")).append(System.lineSeparator());
+        for (Employee employee : employeeList) {
+            output.append(employee).append(System.lineSeparator());
+        }
+        return output.append(FormatUtil.line(80, "=")).toString();
+    }
 
-        for (Employee employee : employees) {
+    private void
+    addEmployeeLocked(Employee employee) {
+        ValidationUtil.validateEmployee(employee);
+        if (employeesById.containsKey(employee.getEmpId())) {
+            throw new IllegalStateException("Employee with ID " + employee.getEmpId() + " already exists.");
+        }
+        employeesById.put(employee.getEmpId(), employee);
+        departments.add(employee.getDepartment());
+        nextEmployeeId = Math.max(nextEmployeeId, employee.getEmpId() + 1);
+    }
+
+    private void rebuildDepartmentsLocked() {
+        departments.clear();
+        for (Employee employee : employeesById.values()) {
             departments.add(employee.getDepartment());
         }
     }
 
+    private NoSuchElementException employeeNotFound(int empId) {
+        return new NoSuchElementException("Employee with ID " + empId + " was not found.");
+    }
+
     private String toFileRecord(Employee employee) {
-        if (employee instanceof PermanentEmployee permanentEmployee) {
-            return String.join("|",
-                    "PERMANENT",
-                    String.valueOf(employee.getEmpId()),
-                    encode(employee.getName()),
-                    encode(employee.getDepartment()),
-                    String.valueOf(employee.getSalary()),
-                    String.valueOf(permanentEmployee.getYearsOfService()));
+        if (employee instanceof PermanentEmployee) {
+            PermanentEmployee permanent = (PermanentEmployee) employee;
+            return String.join("|", "PERMANENT", String.valueOf(employee.getEmpId()), encode(employee.getName()), encode(employee.getDepartment()), String.valueOf(employee.getSalary()), String.valueOf(permanent.getYearsOfService()));
         }
-
-        if (employee instanceof ContractEmployee contractEmployee) {
-            return String.join("|",
-                    "CONTRACT",
-                    String.valueOf(employee.getEmpId()),
-                    encode(employee.getName()),
-                    encode(employee.getDepartment()),
-                    String.valueOf(employee.getSalary()),
-                    String.valueOf(contractEmployee.getContractMonths()));
+        if (employee instanceof ContractEmployee) {
+            ContractEmployee contract = (ContractEmployee) employee;
+            return String.join("|", "CONTRACT", String.valueOf(employee.getEmpId()), encode(employee.getName()), encode(employee.getDepartment()), String.valueOf(employee.getSalary()), String.valueOf(contract.getContractMonths()));
         }
-
-        if (employee instanceof Intern intern) {
-            return String.join("|",
-                    "INTERN",
-                    String.valueOf(employee.getEmpId()),
-                    encode(employee.getName()),
-                    encode(employee.getDepartment()),
-                    String.valueOf(employee.getSalary()),
-                    encode(intern.getUniversity()));
+        if (employee instanceof Intern) {
+            Intern intern = (Intern) employee;
+            return String.join("|", "INTERN", String.valueOf(employee.getEmpId()), encode(employee.getName()), encode(employee.getDepartment()), String.valueOf(employee.getSalary()), encode(intern.getUniversity()));
         }
-
         throw new IllegalArgumentException("Unsupported employee type: " + employee.getClass().getSimpleName());
     }
 
     private Employee fromFileRecord(String record, int lineNumber) throws IOException {
         String[] parts = record.split("\\|", -1);
-
         if (parts.length != 6) {
             throw new IOException("Invalid employee file format at line " + lineNumber + ".");
         }
-
         try {
-            String type = parts[0];
-            int empId = Integer.parseInt(parts[1]);
+            int id = Integer.parseInt(parts[1]);
             String name = decode(parts[2]);
             String department = decode(parts[3]);
             double salary = Double.parseDouble(parts[4]);
-
-            switch (type) {
-                case "PERMANENT":
-                    return new PermanentEmployee(empId, name, department, salary, Integer.parseInt(parts[5]));
-                case "CONTRACT":
-                    return new ContractEmployee(empId, name, department, salary, Integer.parseInt(parts[5]));
-                case "INTERN":
-                    return new Intern(empId, name, department, salary, decode(parts[5]));
-                default:
-                    throw new IOException("Unknown employee type at line " + lineNumber + ": " + type);
-            }
+            if ("PERMANENT".equals(parts[0])) return new PermanentEmployee(id, name, department, salary, Integer.parseInt(parts[5]));
+            if ("CONTRACT".equals(parts[0])) return new ContractEmployee(id, name, department, salary, Integer.parseInt(parts[5]));
+            if ("INTERN".equals(parts[0])) return new Intern(id, name, department, salary, decode(parts[5]));
+            throw new IllegalArgumentException("Unknown employee type '" + parts[0] + "'.");
         } catch (IllegalArgumentException exception) {
             throw new IOException("Invalid employee file data at line " + lineNumber + ".", exception);
         }
     }
 
-    private String encode(String value) {
-        return Base64.getEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8));
-    }
+    private String encode(String value) { return Base64.getEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8)); }
+    private String decode(String value) { return new String(Base64.getDecoder().decode(value), StandardCharsets.UTF_8); }
 
-    private String decode(String value) {
-        return new String(Base64.getDecoder().decode(value), StandardCharsets.UTF_8);
+    public static final class PayrollSummary {
+        private final int employeeCount;
+        private final double totalSalary;
+        private final double totalBonus;
+        public PayrollSummary(int employeeCount, double totalSalary, double totalBonus) { this.employeeCount = employeeCount; this.totalSalary = totalSalary; this.totalBonus = totalBonus; }
+        public int getEmployeeCount() { return employeeCount; }
+        public double getTotalSalary() { return totalSalary; }
+        public double getTotalBonus() { return totalBonus; }
+        public double getTotalPayroll() { return totalSalary + totalBonus; }
     }
 }

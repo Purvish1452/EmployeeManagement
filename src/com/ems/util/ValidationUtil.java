@@ -1,6 +1,5 @@
 package com.ems.util;
 
-import com.ems.exception.InvalidEmployeeDataException;
 import com.ems.model.Employee;
 
 public final class ValidationUtil {
@@ -19,25 +18,25 @@ public final class ValidationUtil {
         return value != null && !value.trim().isEmpty();
     }
 
-    public static void validateEmployee(Employee employee) throws InvalidEmployeeDataException {
+    public static void validateEmployee(Employee employee) {
         if (employee == null) {
-            throw new InvalidEmployeeDataException("Employee cannot be null.");
+            throw new IllegalArgumentException("Employee cannot be null.");
         }
 
         if (!isPositive(employee.getEmpId())) {
-            throw new InvalidEmployeeDataException("Employee ID must be positive.");
+            throw new IllegalArgumentException("Employee ID must be positive.");
         }
 
         if (!isNonBlank(employee.getName())) {
-            throw new InvalidEmployeeDataException("Employee name cannot be empty.");
+            throw new IllegalArgumentException("Employee name cannot be empty.");
         }
 
         if (!isNonBlank(employee.getDepartment())) {
-            throw new InvalidEmployeeDataException("Department cannot be empty.");
+            throw new IllegalArgumentException("Department cannot be empty.");
         }
 
         if (!isPositive(employee.getSalary())) {
-            throw new InvalidEmployeeDataException("Salary must be positive.");
+            throw new IllegalArgumentException("Salary must be positive.");
         }
     }
 }
