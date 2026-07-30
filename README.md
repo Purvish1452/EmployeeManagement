@@ -1,130 +1,74 @@
 # Employee Management System
 
-A console-based Java Employee Management System built using object-oriented design, custom exceptions, and Java collections.
+A thread-safe Java console and socket-based Employee Management System. It uses only standard Java exceptions and keeps each authenticated user's records isolated.
 
-## Overview
+## Requirements
 
-This application allows users to manage employee records from the command line. It supports different employee types, persistent storage, validation, and payroll-related information.
+- Java 11 or newer
 
-## Features
-
-- Add new employees as:
-  - Permanent Employee
-  - Contract Employee
-  - Intern
-- View all employee records
-- Search employees by ID or department
-- Update and delete employee details
-- Validate input data and handle invalid entries
-- Save employee records to `data/employees.txt`
-- Load employee records automatically at startup
-
-## Concepts Used
-
-- Object-Oriented Programming:
-  - Encapsulation with private fields and public getters/setters
-  - Inheritance via `Employee` base class and `PermanentEmployee`, `ContractEmployee`, `Intern`
-  - Abstraction through the abstract `Employee` model and service interfaces
-  - Polymorphism by handling different employee subclasses through the `Employee` type
-- Exception Handling:
-  - Custom checked exceptions such as `DuplicateEmployeeException`, `EmployeeNotFoundException`, `InvalidEmployeeDataException`, `DepartmentNotFoundException`, and `InvalidEmployeeTypeException`
-  - Validation and controlled error handling during input, search, update, and file operations
-- Collections:
-  - `List`, `Map`, `Set`, `TreeSet`, and concurrent collections such as `ConcurrentHashMap`
-  - Collection-based search, sorting, and department grouping
-- File Handling:
-  - Persistent storage using `java.nio.file.Files`
-  - Reading and writing employee records from `data/employees.txt`
-  - Base64 encoding/decoding for safe record serialization
-- Enums:
-  - `EmployeeType` enum for employee category selection and validation
-- Multithreading / Concurrency:
-  - Server-side thread pool with `ExecutorService` and `Executors.newFixedThreadPool`
-  - Client request handling using `Runnable` in `ClientHandler`
-  - Concurrent data structures and thread-safe employee management for multiple clients
-
-## Prerequisites
-
-- Java JDK 8 or newer
-- Unix-like shell (Linux, macOS) or Windows command prompt / PowerShell
-
-## Build and Run
-
-From the project root directory:
-
-```bash
-javac -d out $(find src -name "*.java")
-java -cp out com.ems.EmployeeManagementSystem
-```
-
-Alternatively, compile and run in one command:
+## Build and run
 
 ```bash
 mkdir -p out
 javac -d out $(find src -name "*.java")
+
+# Local console application
 java -cp out com.ems.EmployeeManagementSystem
+
+# Or run the server, then connect one or more clients in other terminals
+java -cp out com.ems.server.EmployeeServer
+java -cp out com.ems.client.EmployeeClient
 ```
 
-## Usage
+At startup, choose **register** to create a username/password, or **log in** to access an existing account. Usernames must be 3-32 letters, digits, `_`, or `-`; passwords must be at least eight characters.
 
-When the application starts, a menu is displayed. Use the menu to perform actions such as:
+## Authentication and storage
 
-1. Add an employee
-2. View all employees
-3. Search by employee ID
-4. Search by department
-5. Update employee details
-6. Delete an employee
-7. Exit
+- A client must send `LOGIN|username|password` or `REGISTER|username|password` before it can use any employee command.
+- Passwords are salted and PBKDF2-HMAC-SHA-256 hashed; they are not stored in plain text.
+- User data is isolated at `data/users/<username>/employees.txt`. Credentials are stored alongside it in `credentials.txt`.
+- Username validation and normalized paths prevent path traversal. The server never accepts a username as a file path.
+- Each account has one shared, thread-safe `EmployeeManager`. It uses a single non-fair read/write lock to protect related standard collections and allows concurrent reads. A per-user lock only serializes account initialization and writes to that account's file.
+- Employee records are immutable. Reads receive immutable snapshots, so data can safely be formatted, persisted, or iterated after the manager lock is released.
 
-Employee data is persisted to `data/employees.txt`, so records remain available between runs.
+## Client commands
 
-## Project Structure
+After authenticating, the socket client supports:
 
 ```text
-EmployeeManagementSystem/
-├── data/
-│   └── employees.txt
-├── src/
-│   └── com/
-│       └── ems/
-│           ├── client/
-│           │   └── EmployeeClient.java
-│           ├── enums/
-│           │   └── EmployeeType.java
-│           ├── exception/
-│           │   ├── DepartmentNotFoundException.java
-│           │   ├── DuplicateEmployeeException.java
-│           │   ├── EmployeeNotFoundException.java
-│           │   ├── InvalidEmployeeDataException.java
-│           │   └── InvalidEmployeeTypeException.java
-│           ├── model/
-│           │   ├── ContractEmployee.java
-│           │   ├── Employee.java
-│           │   ├── Intern.java
-│           │   └── PermanentEmployee.java
-│           ├── server/
-│           │   ├── ClientHandler.java
-│           │   └── EmployeeServer.java
-│           ├── service/
-│           │   └── EmployeeManager.java
-│           ├── util/
-│           │   ├── FormatUtil.java
-│           │   ├── InputUtil.java
-│           │   ├── MenuUtil.java
-│           │   ├── PayrollUtil.java
-│           │   └── ValidationUtil.java
-│           ├── EmployeeManagementSystem.java
-│           └── client/
-│               └── EmployeeClient.java
-└── README.md
+ADD|Name|Department|Salary
+SEARCH|EmployeeId
+UPDATE|EmployeeId|Salary
+DELETE|EmployeeId
+VIEW
+PAYROLL
+EXIT
 ```
 
-## Notes
+Server-created employee IDs are generated within the authenticated user's record set. No account can read or alter another account's manager or storage path.
 
-- If `data/employees.txt` does not exist, the system creates it automatically when saving records.
-- Keep the `out` directory separate from source files for compiled classes.
+## Error handling
 
-## License
+There are no project-defined exception classes. Validation and service failures use built-in exceptions directly:
 
-This project is provided for educational use and demonstration purposes.
+- `IllegalArgumentException` for invalid values and command formats
+- `IllegalStateException` for duplicate IDs or use before login
+- `NoSuchElementException` for missing employees/departments
+- `NumberFormatException` for malformed numeric input
+- `IOException` for persistence and network failures
+
+The console client, standalone application, and server handler catch these exceptions at their interaction boundary and display their messages.
+
+## Project layout
+
+```text
+src/com/ems/
+├── EmployeeManagementSystem.java
+├── client/EmployeeClient.java
+├── enums/EmployeeType.java
+├── model/
+├── server/{ClientHandler,EmployeeServer}.java
+├── service/{EmployeeManager,UserAuthenticationService}.java
+└── util/
+data/users/<username>/{credentials.txt,employees.txt}
+```
