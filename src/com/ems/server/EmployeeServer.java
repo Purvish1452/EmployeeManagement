@@ -28,7 +28,7 @@ public class EmployeeServer {
         }
     }
 
-    @SuppressWarnings("try")
+
     public static void main(String[] args) {
         // configure global logging format once at startup
         Logger root = Logger.getLogger("");
