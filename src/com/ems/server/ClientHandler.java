@@ -38,7 +38,6 @@ public class ClientHandler implements Runnable {
 
             // Read exactly one request from the client, respond, then terminate.
             String request = reader.readLine();
-            System.out.println("SERVER RECEIVED: " + request);
             if (request == null) {
                 // client closed without sending a request
                 return; // client closed connection
@@ -140,8 +139,6 @@ public class ClientHandler implements Runnable {
     }
 
     private String handleRequest(String[] parts) {
-        System.out.println(Arrays.toString(parts));
-        System.out.println("Length = " + parts.length);
         if (parts.length < 3) {
             return "ERROR|Invalid REQUEST format.";
         }
@@ -216,8 +213,7 @@ public class ClientHandler implements Runnable {
                         return "ERROR|Invalid VIEW format.";
                     }
                     String formatted = manager.formatEmployees(manager.getEmployees(), "ALL EMPLOYEES");
-                    return "SUCCESS|" + formatted.replaceAll("\n", "\\n");
-
+                    return "SUCCESS|" + formatted.replace("\n", "\\n");
                 case "PAYROLL":
                     if (parts.length != 3) {
                         return "ERROR|Invalid PAYROLL format.";

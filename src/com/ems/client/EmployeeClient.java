@@ -51,7 +51,7 @@ public class EmployeeClient {
                 if ("EXIT".equalsIgnoreCase(command)) {
                     // attempt logout if logged in
                     if (sessionToken != null) {
-                    sendAndPrint("LOGOUT|" + sessionToken.trim());
+                    sendAndPrint("LOGOUT|" + sessionToken);
                     }
                     LOGGER.info("[CLIENT] Exited");
                     return;
@@ -69,9 +69,10 @@ public class EmployeeClient {
                             System.out.println("Not authenticated. Please login or register first.");
                             break;
                         }
-                        // Ensure token and command have no stray whitespace/newlines
-                        String safeToken = sessionToken.trim();
-                        String safeCommand = command.replaceAll("\r?\n", "").trim();
+                        // Compose request using stored sessionToken and user command. Token should be clean
+                        // because sendAndReceive reads the server response as a single line (protocol ensures one-line token).
+                        String safeToken = sessionToken; // do not trim unless trimming is the proven root cause
+                        String safeCommand = command;    // buildCommand() produces newline-free strings
                         String request = "REQUEST|" + safeToken + "|" + safeCommand;
                         String response = sendAndReceive(request);
                         printResponse(response);
@@ -114,8 +115,8 @@ public class EmployeeClient {
             }
 
             if (response.startsWith("SUCCESS|")) {
-                // Trim whitespace/newlines from token to avoid protocol split across lines
-                sessionToken = response.substring("SUCCESS|".length()).trim();
+            // Store token as-is; sendAndReceive reads exactly one line so token shouldn't contain newlines
+            sessionToken = response.substring("SUCCESS|".length());
                 System.out.println("Authenticated. Session token acquired.");
                 return true;
             } else if (response.startsWith("ERROR|")) {
