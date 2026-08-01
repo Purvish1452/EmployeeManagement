@@ -3,17 +3,25 @@ package com.ems.server;
 import com.ems.service.EmployeeManager;
 import com.ems.service.UserAuthenticationService;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
 import java.net.Socket;
-import java.net.SocketTimeoutException;
 import java.util.Arrays;
 import java.util.Locale;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
+/**
+ * ClientHandler for task-per-thread design: handles exactly one request per connection.
+ */
 public class ClientHandler implements Runnable {
+
+    private static final Logger LOGGER = Logger.getLogger(ClientHandler.class.getName());
 
     private final Socket clientSocket;
     private final UserAuthenticationService authenticationService;
-    private UserAuthenticationService.UserSession session;
 
     public ClientHandler(Socket clientSocket,
                          UserAuthenticationService authenticationService) {
@@ -26,169 +34,224 @@ public class ClientHandler implements Runnable {
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(clientSocket.getInputStream()));
+             PrintWriter writer = new PrintWriter(clientSocket.getOutputStream(), true)) {
 
-             PrintWriter writer = new PrintWriter(
-                     clientSocket.getOutputStream(), true)) {
-
-            writer.println("Welcome. LOGIN|username|password or REGISTER|username|password");
-
-            String command;
-
-            while ((command = reader.readLine()) != null) {
-
-                if ("EXIT".equalsIgnoreCase(command.trim())) {
-                    writer.println("Goodbye!");
-                    break;
-                }
-
-                writer.println(processCommand(command));
+            // Read exactly one request from the client, respond, then terminate.
+            String request = reader.readLine();
+            System.out.println("SERVER RECEIVED: " + request);
+            if (request == null) {
+                // client closed without sending a request
+                return; // client closed connection
             }
 
-        }catch (SocketTimeoutException e) {
-            System.out.println("Client inactive for 60 seconds. Closing connection.");
-        }
-        catch (IOException e) {
-            System.out.println("Client disconnected.");
+            // Read and process a single request; do not log every request to keep logs minimal.
+            String response;
+            try {
+                response = processSingleRequest(request);
+            } catch (Exception e) {
+                // Unexpected exception during processing: log stack trace and send safe message
+                LOGGER.log(Level.SEVERE, "Unexpected error processing request", e);
+                response = "ERROR|Internal server error";
+            }
+
+            writer.println(response);
+
+        } catch (IOException e) {
+            // Connection-level IO issues are recoverable; log at WARNING
+            LOGGER.log(Level.WARNING, "Connection error", e);
+        } catch (Throwable t) {
+            // Defensive: unexpected severe error
+            LOGGER.log(Level.SEVERE, "Unexpected error handling client", t);
         } finally {
             try {
                 clientSocket.close();
-            } catch (IOException ignored) {
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Error closing client socket", e);
             }
+            // Log disconnect once
+            LOGGER.info("[CLIENT] Disconnected");
         }
     }
 
-    private String processCommand(String command) {
-
+    private String processSingleRequest(String command) {
         try {
-
             String[] parts = command.split("\\|");
             String action = parts[0].toUpperCase(Locale.ROOT);
 
             switch (action) {
-
                 case "LOGIN":
+                    return handleLogin(parts);
                 case "REGISTER":
-                    return authenticate(action, parts);
-
-                case "ADD":
-                case "SEARCH":
-                case "UPDATE":
-                case "DELETE":
-                case "VIEW":
-                case "PAYROLL":
-
-                    if (session == null) {
-                        throw new IllegalStateException("Please login first.");
-                    }
-
-                    return employeeCommand(action, parts);
-
+                    return handleRegister(parts);
+                case "REQUEST":
+                    return handleRequest(parts);
+                case "LOGOUT":
+                    return handleLogout(parts);
                 default:
-                    return "Unknown command.";
+                    LOGGER.warning("Invalid request");
+                    return "ERROR|Unknown command.";
             }
 
-        } catch (Exception e) {
-            return "Error: " + e.getMessage();
+        } catch (IllegalArgumentException e) {
+            // Validation failure: warn and return client-friendly message
+        LOGGER.warning("Invalid request");
+            return "ERROR|" + e.getMessage();
         }
     }
 
-    private String authenticate(String action, String[] parts) throws IOException {
-
+    private String handleLogin(String[] parts) {
         if (parts.length != 3) {
-            throw new IllegalArgumentException("Invalid command.");
+            return "ERROR|Invalid LOGIN format.";
         }
 
         char[] password = parts[2].toCharArray();
-
         try {
-
-            if ("LOGIN".equals(action)) {
-                session = authenticationService.login(parts[1], password);
-            } else {
-                session = authenticationService.register(parts[1], password);
-            }
-
-            return "Authenticated as " + session.getUsername();
-
+            String token = authenticationService.login(parts[1], password);
+            return "SUCCESS|" + token;
+        } catch (IllegalArgumentException e) {
+            LOGGER.warning("Invalid login attempt");
+            return "ERROR|" + e.getMessage();
+        } catch (IOException e) {
+            LOGGER.log(Level.SEVERE, "Unexpected error during login", e);
+            return "ERROR|Internal server error";
         } finally {
             Arrays.fill(password, '\0');
         }
     }
 
-    private String employeeCommand(String action, String[] parts)
-            throws IOException {
+    private String handleRegister(String[] parts) {
+        if (parts.length != 3) {
+            return "ERROR|Invalid REGISTER format.";
+        }
 
-        EmployeeManager manager = session.getEmployeeManager();
-
-        switch (action) {
-
-            case "ADD":
-
-                requireLength(parts, 4);
-
-                int id = manager.addPermanentEmployeeWithNextId(
-                        parts[1],
-                        parts[2],
-                        Double.parseDouble(parts[3]));
-
-                session.saveEmployees();
-
-                return "Employee added. ID = " + id;
-
-            case "SEARCH":
-
-                requireLength(parts, 2);
-                return manager.searchEmployee(
-                        Integer.parseInt(parts[1])).toString();
-
-            case "UPDATE":
-
-                requireLength(parts, 3);
-
-                manager.updateSalary(
-                        Integer.parseInt(parts[1]),
-                        Double.parseDouble(parts[2]));
-
-                session.saveEmployees();
-
-                return "Employee updated.";
-
-            case "DELETE":
-
-                requireLength(parts, 2);
-
-                manager.removeEmployee(
-                        Integer.parseInt(parts[1]));
-
-                session.saveEmployees();
-
-                return "Employee deleted.";
-
-            case "VIEW":
-
-                return manager.formatEmployees(
-                        manager.getEmployees(),
-                        "ALL EMPLOYEES");
-
-            case "PAYROLL":
-
-                EmployeeManager.PayrollSummary payroll =
-                        manager.getPayrollSummary();
-
-                return "Employees : " + payroll.getEmployeeCount()
-                        + "\nSalary : " + payroll.getTotalSalary()
-                        + "\nBonus : " + payroll.getTotalBonus()
-                        + "\nPayroll : " + payroll.getTotalPayroll();
-
-            default:
-                return "Unknown command.";
+        char[] password = parts[2].toCharArray();
+        try {
+        String token = authenticationService.register(parts[1], password);
+        return "SUCCESS|" + token;
+        } catch (IllegalArgumentException e) {
+        LOGGER.warning("Invalid registration attempt");
+        return "ERROR|" + e.getMessage();
+        } catch (IOException e) {
+        LOGGER.log(Level.SEVERE, "Unexpected error during registration", e);
+        return "ERROR|Internal server error";
+        } finally {
+        Arrays.fill(password, '\0');
         }
     }
 
-    private void requireLength(String[] parts, int expected) {
+    private String handleRequest(String[] parts) {
+        System.out.println(Arrays.toString(parts));
+        System.out.println("Length = " + parts.length);
+        if (parts.length < 3) {
+            return "ERROR|Invalid REQUEST format.";
+        }
 
-        if (parts.length != expected) {
-            throw new IllegalArgumentException("Invalid command format.");
+        String token = parts[1];
+        UserAuthenticationService.UserSession session = authenticationService.getSession(token);
+        if (session == null) {
+            LOGGER.warning("Invalid session token");
+            return "ERROR|Invalid or expired session token.";
+        }
+
+        EmployeeManager manager = session.getEmployeeManager();
+        String op = parts[2].toUpperCase(Locale.ROOT);
+
+        try {
+            switch (op) {
+                case "ADD":
+                    if (parts.length != 6) { // REQUEST|token|ADD|name|dept|salary => 6 parts
+                        return "ERROR|Invalid ADD format.";
+                    }
+                    String name = parts[3];
+                    String dept = parts[4];
+                    double salary = Double.parseDouble(parts[5]);
+                    int id = manager.addPermanentEmployeeWithNextId(name, dept, salary);
+                    try {
+                        session.saveEmployees();
+                    } catch (IOException e) {
+                    // critical file operation failure
+                    LOGGER.log(Level.SEVERE, "Unable to save employees: " + e.getMessage(), e);
+                    return "ERROR|Unable to save employees: " + e.getMessage();
+                    }
+                    return "SUCCESS|Employee added. ID=" + id;
+
+                case "SEARCH":
+                    if (parts.length != 4) { // REQUEST|token|SEARCH|id
+                        return "ERROR|Invalid SEARCH format.";
+                    }
+                    int searchId = Integer.parseInt(parts[3]);
+                    return "SUCCESS|" + manager.searchEmployee(searchId).toString();
+
+                case "UPDATE":
+                    if (parts.length != 5) { // REQUEST|token|UPDATE|id|salary
+                        return "ERROR|Invalid UPDATE format.";
+                    }
+                    int updateId = Integer.parseInt(parts[3]);
+                    double newSalary = Double.parseDouble(parts[4]);
+                    manager.updateSalary(updateId, newSalary);
+                    try {
+                        session.saveEmployees();
+                    } catch (IOException e) {
+                        LOGGER.log(Level.SEVERE, "Unable to save employees: " + e.getMessage(), e);
+                        return "ERROR|Unable to save employees: " + e.getMessage();
+                    }
+                    return "SUCCESS|Employee updated.";
+
+                case "DELETE":
+                    if (parts.length != 4) { // REQUEST|token|DELETE|id
+                        return "ERROR|Invalid DELETE format.";
+                    }
+                    int deleteId = Integer.parseInt(parts[3]);
+                    manager.removeEmployee(deleteId);
+                    try {
+                        session.saveEmployees();
+                    } catch (IOException e) {
+                        LOGGER.log(Level.SEVERE, "Unable to save employees: " + e.getMessage(), e);
+                        return "ERROR|Unable to save employees: " + e.getMessage();
+                    }
+                    return "SUCCESS|Employee deleted.";
+
+                case "VIEW":
+                    if (parts.length != 3) {
+                        return "ERROR|Invalid VIEW format.";
+                    }
+                    String formatted = manager.formatEmployees(manager.getEmployees(), "ALL EMPLOYEES");
+                    return "SUCCESS|" + formatted.replaceAll("\n", "\\n");
+
+                case "PAYROLL":
+                    if (parts.length != 3) {
+                        return "ERROR|Invalid PAYROLL format.";
+                    }
+                    EmployeeManager.PayrollSummary payroll = manager.getPayrollSummary();
+                    String payrollStr = "Employees:" + payroll.getEmployeeCount()
+                            + ";Salary:" + payroll.getTotalSalary()
+                            + ";Bonus:" + payroll.getTotalBonus()
+                            + ";Payroll:" + payroll.getTotalPayroll();
+                    return "SUCCESS|" + payrollStr;
+
+                default:
+                    LOGGER.warning("Invalid operation");
+                    return "ERROR|Unknown operation.";
+            }
+        } catch (NumberFormatException e) {
+        LOGGER.warning("Invalid numeric value in request");
+            return "ERROR|Invalid numeric value in request.";
+        } catch (Exception e) {
+            // Unexpected error - will be handled at caller
+            throw e;
+        }
+    }
+
+    private String handleLogout(String[] parts) {
+        if (parts.length != 2) {
+            return "ERROR|Invalid LOGOUT format.";
+        }
+
+        boolean removed = authenticationService.logout(parts[1]);
+        if (removed) {
+            return "SUCCESS|Logged out.";
+        } else {
+            return "ERROR|Invalid or expired session token.";
         }
     }
 }

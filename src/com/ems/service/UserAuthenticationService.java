@@ -8,15 +8,29 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 
-/** Handles registration, login, and the employee data belonging to each user. */
+/** Handles registration, login, and the employee data belonging to each user.
+ *  Now also manages active sessions using session tokens (UUIDs).
+ */
 public class UserAuthenticationService {
+    private static final Logger LOGGER = Logger.getLogger(UserAuthenticationService.class.getName());
     private static final Path USERS_DIRECTORY = Path.of("data", "users").toAbsolutePath().normalize();
 
     private final Map<String, UserData> users = new HashMap<>();
 
-    public UserSession register(String username, char[] password) throws IOException {
+    // Active sessions: token -> UserSession
+    private final ConcurrentHashMap<String, UserSession> activeSessions = new ConcurrentHashMap<>();
+
+    /**
+     * Register user and create a new session token.
+     * Returns session token on success.
+     */
+    public String register(String username, char[] password) throws IOException {
         validateCredentials(username, password);
 
         UserData userData = getUserData(username);
@@ -37,13 +51,18 @@ public class UserAuthenticationService {
                     credentials,
                     StandardCharsets.UTF_8);
 
-            userData.employeesLoaded = true;
+            userData.employeesLoaded = true; // new user, nothing to load
 
-            return new UserSession(username, userData);
+            UserSession session = new UserSession(username, userData);
+            return createSession(session);
         }
     }
 
-    public UserSession login(String username, char[] password) throws IOException {
+    /**
+     * Login user and create a new session token.
+     * Returns session token on success.
+     */
+    public String login(String username, char[] password) throws IOException {
         validateCredentials(username, password);
 
         UserData userData = getUserData(username);
@@ -64,6 +83,7 @@ public class UserAuthenticationService {
             String[] parts = line.split(":", 2);
 
             if (parts.length != 2) {
+                LOGGER.severe("Malformed credentials file");
                 throw new IOException("Invalid credentials file.");
             }
 
@@ -72,7 +92,6 @@ public class UserAuthenticationService {
 
             if (!storedUsername.equals(username)
                     || !storedPasswordHash.equals(hashPassword(password))) {
-
                 throw new IllegalArgumentException(
                         "Invalid username or password.");
             }
@@ -84,8 +103,32 @@ public class UserAuthenticationService {
                 userData.employeesLoaded = true;
             }
 
-            return new UserSession(username, userData);
+            UserSession session = new UserSession(username, userData);
+            return createSession(session);
         }
+    }
+
+    private String createSession(UserSession session) {
+        String token = UUID.randomUUID().toString();
+        activeSessions.put(token, session);
+        return token;
+    }
+
+    /**
+     * Returns the UserSession for a token or null if not present.
+     */
+    public UserSession getSession(String token) {
+        if (token == null) return null;
+        return activeSessions.get(token);
+    }
+
+    /**
+     * Invalidate a session token. Returns true if removed.
+     */
+    public boolean logout(String token) {
+        if (token == null) return false;
+        boolean removed = activeSessions.remove(token) != null;
+        return removed;
     }
 
     private UserData getUserData(String username) {

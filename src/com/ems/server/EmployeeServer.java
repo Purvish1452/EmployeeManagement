@@ -7,29 +7,49 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.logging.*;
 
 public class EmployeeServer {
+    private static final Logger LOGGER = Logger.getLogger(EmployeeServer.class.getName());
     private static final int PORT = 5000;
     private static final int THREAD_POOL_SIZE = 5;
 
+    // Plain formatter that prints only the concise message lines required by the user
+    private static class PlainFormatter extends Formatter {
+        @Override
+        public String format(LogRecord record) {
+            String msg = record.getMessage();
+            if (record.getLevel() == Level.SEVERE) {
+                return "[ERROR] " + msg + System.lineSeparator();
+            } else if (record.getLevel() == Level.WARNING) {
+                return "[WARNING] " + msg + System.lineSeparator();
+            }
+            return msg + System.lineSeparator();
+        }
+    }
+
     @SuppressWarnings("try")
     public static void main(String[] args) {
-        System.out.println("SERVER BUILD: " + EmployeeServer.class.getProtectionDomain()
-                .getCodeSource().getLocation());
+        // configure global logging format once at startup
+        Logger root = Logger.getLogger("");
+        for (Handler h : root.getHandlers()) {
+            h.setFormatter(new PlainFormatter());
+        }
+        root.setLevel(Level.ALL);
+
         ExecutorService threadPool = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
         UserAuthenticationService authenticationService = new UserAuthenticationService();
 
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
-            System.out.println("Server Started on port " + PORT + "...");
+            LOGGER.info("[SERVER] Started on port " + PORT);
 
-            // If you do ctrl+c on Running program then jvm close resources then it otherwise jvm direct exit and resource inconsistent
-            // Add Shutdown Hook for Graceful Shutdown
+            // Shutdown Hook for Graceful Shutdown
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("\nInitiating graceful shutdown...");
+                LOGGER.info("[SERVER] Shutdown");
                 try {
                     serverSocket.close();
                 } catch (IOException e) {
-                    System.err.println("Error closing ServerSocket: " + e.getMessage());
+                    LOGGER.log(Level.SEVERE, "Error closing ServerSocket", e);
                 }
 
                 threadPool.shutdown();
@@ -41,26 +61,27 @@ public class EmployeeServer {
                     threadPool.shutdownNow();
                     Thread.currentThread().interrupt();
                 }
-                System.out.println("Server fully shut down.");
             }));
 
             while (!serverSocket.isClosed()) {
                 try {
                     Socket clientSocket = serverSocket.accept();
                     clientSocket.setSoTimeout(60000);
-                    //System.out.println("Socket timeout = " + clientSocket.getSoTimeout());
+                    // single concise client connection log
+                    LOGGER.info("[CLIENT] Connected");
                     threadPool.execute(new ClientHandler(clientSocket, authenticationService));
                 } catch (java.net.SocketException e) {
-                    // This exception is expected when serverSocket is closed via shutdown hook
                     if (serverSocket.isClosed()) {
-                        System.out.println("ServerSocket closed, stopping accept loop.");
+                        break;
                     } else {
-                        throw e;
+                        LOGGER.log(Level.WARNING, "Socket exception in accept loop", e);
                     }
+                } catch (IOException e) {
+                    LOGGER.log(Level.WARNING, "I/O exception in accept loop", e);
                 }
             }
         } catch (IOException e) {
-            System.err.println("Server error: " + e.getMessage());
+            LOGGER.log(Level.SEVERE, "Server failed to start", e);
         } finally {
             if (!threadPool.isShutdown()) {
                 threadPool.shutdown();

@@ -36,6 +36,7 @@ public class EmployeeManager {
     private final Set<String> departments = new HashSet<>();
     private int nextEmployeeId = 101;
 
+
     public void addEmployee(Employee employee) {
         ValidationUtil.validateEmployee(employee);
         lock.writeLock().lock();
@@ -74,8 +75,10 @@ public class EmployeeManager {
     public List<Employee> getEmployees() {
         lock.readLock().lock();
         try {
+            System.out.println("Read lock acquire");
             return Collections.unmodifiableList(new ArrayList<>(employeesById.values()));
         } finally {
+            System.out.println("Read lock acquire");
             lock.readLock().unlock();
         }
     }
@@ -140,10 +143,16 @@ public class EmployeeManager {
     public int addPermanentEmployeeWithNextId(String name, String department, double salary) {
         lock.writeLock().lock();
         try {
+            System.out.println("Write lock acquired");
+            Thread.sleep(15000);
             int employeeId = nextEmployeeId;
             addEmployeeLocked(new PermanentEmployee(employeeId, name, department, salary, 1));
             return employeeId;
+
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         } finally {
+            System.out.println("Write lock released");
             lock.writeLock().unlock();
         }
     }
