@@ -117,7 +117,7 @@ public class EmployeeClient {
             if (response.startsWith("SUCCESS|")) {
             // Store token as-is; sendAndReceive reads exactly one line so token shouldn't contain newlines
             sessionToken = response.substring("SUCCESS|".length());
-                System.out.println("Authenticated. Session token acquired.");
+                System.out.println("Login successful. Welcome!");
                 return true;
             } else if (response.startsWith("ERROR|")) {
                 // Show error but do not terminate; allow user to retry or exit
